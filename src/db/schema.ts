@@ -1,7 +1,7 @@
 import { pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 
 export const orders = pgTable("orders", {
-	id: uuid("id").primaryKey(),
+	id: uuid("id").primaryKey().defaultRandom(),
 	status: text("status").notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true })
 		.defaultNow()
