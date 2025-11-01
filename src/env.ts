@@ -5,7 +5,7 @@ export const env = createEnv({
 	server: {
 		SUPABASE_DATABASE_URL: z
 			.url()
-			.refine(
+			   .refine(
 				(url) => url.includes("supabase.co"),
 				"SUPABASE_DATABASE_URL must point to Supabase",
 			),
