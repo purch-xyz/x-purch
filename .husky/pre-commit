@@ -1,0 +1,4 @@
+set -e
+
+# Ensure code is formatted, auto-fixed, and linted before committing
+bun run lint
