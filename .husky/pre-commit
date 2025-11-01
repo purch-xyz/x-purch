@@ -1,8 +1,6 @@
-#!/usr/bin/env sh
-. "$(dirname -- "$0")/_/husky.sh"
-
 set -e
 
 # Ensure code is formatted, auto-fixed, and linted before committing
 bun run format
 bun run lint:fix
+bun run lint
