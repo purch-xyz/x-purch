@@ -3,6 +3,7 @@ node_modules/
 
 # AI Assistant Configurations
 CLAUDE.md
+AGENTS.md
 .cursor/
 .cursorrules
 .github/copilot-instructions.md
