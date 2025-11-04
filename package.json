@@ -11,10 +11,18 @@
 		"db:studio": "bunx drizzle-kit studio"
 	},
 	"dependencies": {
+		"@coinbase/x402": "^0.7.1",
+		"@scure/base": "^2.0.0",
+		"@solana/web3.js": "^1.98.4",
 		"@t3-oss/env-core": "^0.13.8",
+		"bs58": "^6.0.0",
 		"drizzle-orm": "^0.44.7",
 		"hono": "^4.10.4",
 		"postgres": "^3.4.7",
+		"viem": "^2.38.6",
+		"x402-axios": "^0.7.0",
+		"x402-fetch": "^0.7.0",
+		"x402-hono": "^0.7.1",
 		"zod": "^4.1.12"
 	},
 	"devDependencies": {
@@ -22,6 +30,7 @@
 		"@types/bun": "latest",
 		"dotenv": "^17.2.3",
 		"drizzle-kit": "^0.31.6",
-		"husky": "^9.1.7"
+		"husky": "^9.1.7",
+		"tsx": "^4.20.6"
 	}
 }
