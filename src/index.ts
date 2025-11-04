@@ -1,6 +1,8 @@
 import { createFacilitatorConfig } from "@coinbase/x402";
-import { Hono } from "hono";
+import { Hono, type MiddlewareHandler } from "hono";
 import type { Address } from "viem";
+import { decodePayment } from "x402/schemes";
+import { svm } from "x402/shared";
 import { paymentMiddleware, type SolanaAddress } from "x402-hono";
 import { env } from "./env";
 import { buildCreateOrderHandler } from "./orders/handlers";
@@ -13,6 +15,57 @@ const facilitatorConfig = createFacilitatorConfig(
 	env.X402_CDP_API_KEY_ID,
 	env.X402_CDP_API_KEY_SECRET,
 );
+
+const createPayerLoggingMiddleware = (
+	paymentMethod: string,
+): MiddlewareHandler => {
+	return async (c, next) => {
+		const paymentHeader = c.req.header("X-PAYMENT");
+
+		if (paymentHeader) {
+			try {
+				const decodedPayment = decodePayment(paymentHeader);
+				let payerAddress: string | undefined;
+
+				if ("authorization" in decodedPayment.payload) {
+					payerAddress = decodedPayment.payload.authorization.from;
+				} else if ("transaction" in decodedPayment.payload) {
+					try {
+						const transaction = svm.decodeTransactionFromPayload(
+							decodedPayment.payload,
+						);
+						const extracted = svm.getTokenPayerFromTransaction(transaction);
+						payerAddress = extracted.length > 0 ? extracted : undefined;
+					} catch (transactionError) {
+						console.warn("[x402] Unable to decode Solana payment payload", {
+							paymentMethod,
+							network: decodedPayment.network,
+							error:
+								transactionError instanceof Error
+									? transactionError.message
+									: String(transactionError),
+						});
+					}
+				}
+
+				console.log("[x402] Payment authorized", {
+					paymentMethod,
+					network: decodedPayment.network,
+					path: `${c.req.method.toUpperCase()} ${c.req.path}`,
+					payerAddress: payerAddress ?? null,
+				});
+			} catch (error) {
+				console.warn("[x402] Failed to parse X-PAYMENT header", {
+					paymentMethod,
+					path: `${c.req.method.toUpperCase()} ${c.req.path}`,
+					error: error instanceof Error ? error.message : String(error),
+				});
+			}
+		}
+
+		await next();
+	};
+};
 
 const app = new Hono();
 
@@ -34,6 +87,7 @@ app.use(
 		facilitatorConfig,
 	),
 );
+app.use("/orders/solana", createPayerLoggingMiddleware("solana"));
 
 app.use(
 	"/orders/base",
@@ -62,6 +116,7 @@ app.use(
 		facilitatorConfig,
 	),
 );
+app.use("/orders/base", createPayerLoggingMiddleware("base"));
 
 app.post(
 	"/orders/solana",
