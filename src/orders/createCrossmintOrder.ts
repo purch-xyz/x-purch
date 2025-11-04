@@ -86,9 +86,21 @@ export const createCrossmintOrder = async (
 		paymentMethod,
 	} = args;
 
-	const productLocator = extractAmazonProductLocator(productUrl);
-
 	const baseUrl = env.CROSSMINT_API_BASE_URL ?? "https://www.crossmint.com/api";
+
+	const productLocator = await resolveProductLocator(productUrl);
+
+	console.log("[createCrossmintOrder] Preparing Crossmint request", {
+		baseUrl,
+		path: CROSSMINT_ORDERS_PATH,
+		paymentMethod,
+		email,
+		payerAddress,
+		locale,
+		productUrl,
+		productLocator,
+		hasPhysicalAddress: Boolean(physicalAddress),
+	});
 
 	const body = {
 		recipient: {
@@ -102,9 +114,11 @@ export const createCrossmintOrder = async (
 			currency: CROSSMINT_CURRENCY,
 			payerAddress,
 		},
-		lineItems: {
-			productLocator,
-		},
+		lineItems: [
+			{
+				productLocator,
+			},
+		],
 	};
 
 	const response = await fetch(`${baseUrl}${CROSSMINT_ORDERS_PATH}`, {
@@ -120,7 +134,18 @@ export const createCrossmintOrder = async (
 	const isJson = contentType.includes("application/json");
 	const responseBody = isJson ? await response.json() : await response.text();
 
+	console.log("[createCrossmintOrder] Received Crossmint response", {
+		status: response.status,
+		ok: response.ok,
+		contentType,
+	});
+
 	if (!response.ok) {
+		console.error("[createCrossmintOrder] Crossmint request failed", {
+			status: response.status,
+			body: responseBody,
+		});
+
 		const message =
 			typeof responseBody === "string"
 				? responseBody || "Crossmint order creation failed"
@@ -131,6 +156,10 @@ export const createCrossmintOrder = async (
 	const parsed = responseBody as Partial<CrossmintOrderResponse>;
 
 	if (!parsed?.clientSecret || !parsed?.order?.orderId) {
+		console.error("[createCrossmintOrder] Unexpected response shape", {
+			responseBody,
+		});
+
 		throw new CrossmintOrderError(
 			"Unexpected Crossmint response shape",
 			502,
@@ -138,21 +167,169 @@ export const createCrossmintOrder = async (
 		);
 	}
 
+	console.log("[createCrossmintOrder] Crossmint request succeeded", {
+		orderId: parsed.order.orderId,
+		hasClientSecret: Boolean(parsed.clientSecret),
+		paymentStatus: parsed.order.payment?.status,
+		lineItems: parsed.order.lineItems,
+	});
+
 	return parsed as CrossmintOrderResponse;
 };
 
-const amazonAsinRegex = /[/=]([A-Z0-9]{10})(?:[/?]|$)/i;
+const PLATFORM_HOSTNAMES = {
+	amazon: ["amazon."],
+	shopify: ["myshopify.com"],
+	browserAutomation: [
+		"nike.com",
+		"www.nike.com",
+		"adidas.com",
+		"www.adidas.com",
+		"crocs.com",
+		"www.crocs.com",
+		"gymshark.com",
+		"www.gymshark.com",
+		"on.com",
+		"www.on.com",
+	],
+} as const;
 
-const extractAmazonProductLocator = (productUrl: string): string => {
-	const asinMatch = productUrl.match(amazonAsinRegex);
-	const asin = asinMatch?.[1]?.toUpperCase();
+const PRODUCT_LOCATOR_PREFIXES = ["amazon:", "shopify:", "url:"] as const;
 
-	if (!asin) {
+const SHOPIFY_HEADER_PREFIXES = ["x-shopify"] as const;
+
+export const resolveProductLocator = async (
+	rawProductUrl: string,
+): Promise<string> => {
+	const trimmed = rawProductUrl.trim();
+
+	if (!trimmed) {
+		throw new CrossmintOrderError("Product URL is required", 400);
+	}
+
+	const existingPrefix = PRODUCT_LOCATOR_PREFIXES.find((prefix) =>
+		trimmed.toLowerCase().startsWith(prefix),
+	);
+
+	if (existingPrefix) {
+		return trimmed;
+	}
+
+	let parsedUrl: URL;
+
+	try {
+		parsedUrl = new URL(trimmed);
+	} catch {
+		throw new CrossmintOrderError("Product URL must be a valid URL", 400);
+	}
+
+	const hostname = parsedUrl.hostname.toLowerCase();
+
+	if (PLATFORM_HOSTNAMES.amazon.some((domain) => hostname.includes(domain))) {
+		return `amazon:${trimmed}`;
+	}
+
+	if (PLATFORM_HOSTNAMES.shopify.some((domain) => hostname.includes(domain))) {
+		return buildShopifyLocator(parsedUrl);
+	}
+
+	const isBrowserAutomationDomain = PLATFORM_HOSTNAMES.browserAutomation.some(
+		(domain) => hostname === domain || hostname.endsWith(`.${domain}`),
+	);
+
+	if (isBrowserAutomationDomain) {
+		return `url:${trimmed}`;
+	}
+
+	const detectedShopify = await isShopifyStorefront(parsedUrl);
+
+	if (detectedShopify) {
+		return buildShopifyLocator(parsedUrl);
+	}
+
+	return `url:${trimmed}`;
+};
+
+const isShopifyStorefront = async (url: URL): Promise<boolean> => {
+	const hostname = url.hostname.toLowerCase();
+
+	if (PLATFORM_HOSTNAMES.shopify.some((domain) => hostname.includes(domain))) {
+		return true;
+	}
+
+	const requestUrl = url.toString();
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), 5000);
+
+	const inspectHeaders = (headers: Headers) => {
+		for (const [key, value] of headers.entries()) {
+			const loweredKey = key.toLowerCase();
+			const loweredValue = value.toLowerCase();
+
+			if (
+				SHOPIFY_HEADER_PREFIXES.some((prefix) => loweredKey.startsWith(prefix))
+			) {
+				return true;
+			}
+
+			if (loweredValue.includes("shopify")) {
+				return true;
+			}
+		}
+
+		return false;
+	};
+
+	const tryFetch = async (method: "HEAD" | "GET") => {
+		try {
+			const response = await fetch(requestUrl, {
+				method,
+				redirect: "follow",
+				signal: controller.signal,
+			});
+
+			if (inspectHeaders(response.headers)) {
+				return true;
+			}
+
+			return false;
+		} catch (error) {
+			console.warn("[createCrossmintOrder] Failed to inspect product URL", {
+				requestUrl,
+				method,
+				error,
+			});
+			return false;
+		}
+	};
+
+	try {
+		const headDetected = await tryFetch("HEAD");
+
+		if (headDetected) {
+			return true;
+		}
+
+		return await tryFetch("GET");
+	} finally {
+		clearTimeout(timeout);
+	}
+};
+
+const buildShopifyLocator = (url: URL): string => {
+	const variantId = url.searchParams.get("variant");
+
+	if (!variantId) {
 		throw new CrossmintOrderError(
-			"Unable to extract Amazon ASIN from productUrl",
+			"Shopify product URL must include variant parameter",
 			400,
 		);
 	}
 
-	return `amazon:${asin}`;
+	const normalizedParams = new URLSearchParams(url.search);
+	normalizedParams.delete("variant");
+	const query = normalizedParams.toString();
+	const normalizedUrl = `${url.origin}${url.pathname}${query ? `?${query}` : ""}`;
+
+	return `shopify:${normalizedUrl}:${variantId}`;
 };

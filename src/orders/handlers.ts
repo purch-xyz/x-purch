@@ -54,6 +54,15 @@ export const buildCreateOrderHandler =
 		const data = parsed.data;
 		const { email, payerAddress, locale, physicalAddress, productUrl } = data;
 
+		console.log("[orders] Received create order request", {
+			paymentMethod: config.paymentMethod,
+			email,
+			payerAddress,
+			locale,
+			productUrl,
+			physicalAddress,
+		});
+
 		try {
 			const response = await createCrossmintOrder({
 				email,
@@ -66,6 +75,14 @@ export const buildCreateOrderHandler =
 
 			const preparation = response.order.payment?.preparation;
 			const serializedTransaction = preparation?.serializedTransaction;
+
+			console.log("[orders] Crossmint order created", {
+				orderId: response.order.orderId,
+				clientSecretPresent: Boolean(response.clientSecret),
+				paymentStatus: response.order.payment?.status,
+				quoteStatus: response.order.quote?.status,
+				hasSerializedTransaction: Boolean(serializedTransaction),
+			});
 
 			return c.json(
 				{
@@ -84,6 +101,12 @@ export const buildCreateOrderHandler =
 			);
 		} catch (error) {
 			if (error instanceof CrossmintOrderError) {
+				console.error("[orders] Crossmint order error", {
+					message: error.message,
+					status: error.status,
+					details: error.details,
+				});
+
 				return c.json(
 					{
 						error: error.message,
@@ -94,6 +117,11 @@ export const buildCreateOrderHandler =
 			}
 
 			console.error("Unexpected error creating Crossmint order", error);
+
+			console.error("[orders] Unexpected create order failure", {
+				paymentMethod: config.paymentMethod,
+				error,
+			});
 
 			return c.json(
 				{
