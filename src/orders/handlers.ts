@@ -1,5 +1,7 @@
 import type { Context } from "hono";
 import type { ZodType } from "zod";
+import { db } from "../db/client";
+import { orders, users, type X402Network } from "../db/schema";
 import {
 	CrossmintOrderError,
 	createCrossmintOrder,
@@ -18,8 +20,72 @@ interface CreateOrderHandlerConfig<
 	TSchema extends ZodType<CreateOrderPayload>,
 > {
 	schema: TSchema;
-	paymentMethod: string;
+	paymentMethod: X402Network;
 }
+
+interface SaveOrderParams {
+	orderId: string;
+	email: string;
+	payerAddress: string;
+	network: X402Network;
+}
+
+const saveOrderRecord = async ({
+	orderId,
+	email,
+	payerAddress,
+	network,
+}: SaveOrderParams) => {
+	await db.transaction(async (tx) => {
+		const now = new Date();
+
+		const [userRecord] = await tx
+			.insert(users)
+			.values({
+				walletAddress: payerAddress,
+				network,
+				email,
+				updatedAt: now,
+			})
+			.onConflictDoUpdate({
+				target: [users.walletAddress, users.network],
+				set: {
+					email,
+					updatedAt: now,
+				},
+			})
+			.returning({
+				id: users.id,
+			});
+
+		const userId = userRecord?.id;
+
+		if (!userId) {
+			throw new Error("Failed to persist x402 user");
+		}
+
+		await tx
+			.insert(orders)
+			.values({
+				id: orderId,
+				userId,
+				network,
+				updatedAt: now,
+			})
+			.onConflictDoUpdate({
+				target: orders.id,
+				set: {
+					userId,
+					network,
+					updatedAt: now,
+				},
+			});
+	});
+
+	console.log("[orders] Persisted order record", {
+		orderId,
+	});
+};
 
 export const buildCreateOrderHandler =
 	<TSchema extends ZodType<CreateOrderPayload>>(
@@ -51,8 +117,9 @@ export const buildCreateOrderHandler =
 			);
 		}
 
-		const data = parsed.data;
-		const { email, payerAddress, locale, physicalAddress, productUrl } = data;
+		const payload = parsed.data;
+		const { email, payerAddress, locale, physicalAddress, productUrl } =
+			payload;
 
 		console.log("[orders] Received create order request", {
 			paymentMethod: config.paymentMethod,
@@ -72,6 +139,30 @@ export const buildCreateOrderHandler =
 				productUrl,
 				paymentMethod: config.paymentMethod,
 			});
+
+			try {
+				await saveOrderRecord({
+					orderId: response.order.orderId,
+					email,
+					payerAddress,
+					network: config.paymentMethod,
+				});
+			} catch (databaseError) {
+				console.error("[orders] Failed to persist order record", {
+					orderId: response.order.orderId,
+					error:
+						databaseError instanceof Error
+							? databaseError.message
+							: String(databaseError),
+				});
+
+				return c.json(
+					{
+						error: "Failed to persist order record",
+					},
+					500,
+				);
+			}
 
 			const preparation = response.order.payment?.preparation;
 			const serializedTransaction = preparation?.serializedTransaction;

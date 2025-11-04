@@ -4,6 +4,9 @@ import { z } from "zod";
 export const env = createEnv({
 	server: {
 		SUPABASE_DATABASE_URL: z.url().describe("PostgreSQL database URL"),
+		NODE_ENV: z
+			.enum(["development", "test", "production"])
+			.default("production"),
 		CROSSMINT_API_KEY: z.string().min(1).describe("Crossmint API key"),
 		CROSSMINT_API_BASE_URL: z.string().url().optional(),
 		X402_SOLANA_WALLET_ADDRESS: z
