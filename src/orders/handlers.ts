@@ -1,3 +1,4 @@
+import { eq } from "drizzle-orm";
 import type { Context } from "hono";
 import type { ZodType } from "zod";
 import { db } from "../db/client";
@@ -7,6 +8,11 @@ import {
 	createCrossmintOrder,
 	type PhysicalAddress,
 } from "./createCrossmintOrder";
+import { CrossmintGetOrderError, getCrossmintOrder } from "./getCrossmintOrder";
+import {
+	getOrderStatusHeadersSchema,
+	getOrderStatusParamsSchema,
+} from "./schemas";
 
 interface CreateOrderPayload {
 	email: string;
@@ -28,6 +34,7 @@ interface SaveOrderParams {
 	email: string;
 	payerAddress: string;
 	network: X402Network;
+	clientSecret: string;
 }
 
 const saveOrderRecord = async ({
@@ -35,6 +42,7 @@ const saveOrderRecord = async ({
 	email,
 	payerAddress,
 	network,
+	clientSecret,
 }: SaveOrderParams) => {
 	await db.transaction(async (tx) => {
 		const now = new Date();
@@ -70,6 +78,7 @@ const saveOrderRecord = async ({
 				id: orderId,
 				userId,
 				network,
+				clientSecret,
 				updatedAt: now,
 			})
 			.onConflictDoUpdate({
@@ -77,6 +86,7 @@ const saveOrderRecord = async ({
 				set: {
 					userId,
 					network,
+					clientSecret,
 					updatedAt: now,
 				},
 			});
@@ -85,6 +95,148 @@ const saveOrderRecord = async ({
 	console.log("[orders] Persisted order record", {
 		orderId,
 	});
+};
+
+export const getOrderStatusHandler = async (c: Context) => {
+	const orderId = c.req.param("orderId");
+	const paramsParsed = getOrderStatusParamsSchema.safeParse({ orderId });
+
+	if (!paramsParsed.success) {
+		return c.json(
+			{
+				error: "Invalid order ID format",
+				issues: paramsParsed.error.flatten(),
+			},
+			400,
+		);
+	}
+
+	const authorization = c.req.header("Authorization");
+	const headersParsed = getOrderStatusHeadersSchema.safeParse({
+		authorization,
+	});
+
+	if (!headersParsed.success) {
+		return c.json(
+			{
+				error: "Authorization header is required",
+				issues: headersParsed.error.flatten(),
+			},
+			401,
+		);
+	}
+
+	console.log("[orders] Fetching order status", {
+		orderId: paramsParsed.data.orderId,
+		hasAuth: Boolean(authorization),
+	});
+
+	try {
+		const [orderRecord] = await db
+			.select({
+				clientSecret: orders.clientSecret,
+			})
+			.from(orders)
+			.where(eq(orders.id, paramsParsed.data.orderId))
+			.limit(1);
+
+		if (!orderRecord) {
+			console.log("[orders] Order not found in database", {
+				orderId: paramsParsed.data.orderId,
+			});
+			return c.json(
+				{
+					error: "Order not found",
+					orderId: paramsParsed.data.orderId,
+				},
+				404,
+			);
+		}
+
+		if (orderRecord.clientSecret !== headersParsed.data.authorization) {
+			console.log("[orders] Invalid client secret", {
+				orderId: paramsParsed.data.orderId,
+			});
+			return c.json(
+				{
+					error: "Invalid client secret or access denied",
+				},
+				403,
+			);
+		}
+	} catch (dbError) {
+		console.error("[orders] Database error validating client secret", {
+			orderId: paramsParsed.data.orderId,
+			error: dbError,
+		});
+		return c.json(
+			{
+				error: "Failed to validate authorization",
+			},
+			500,
+		);
+	}
+
+	try {
+		const orderStatus = await getCrossmintOrder(paramsParsed.data.orderId);
+
+		console.log("[orders] Order status retrieved successfully", {
+			orderId: orderStatus.orderId,
+			phase: orderStatus.phase,
+			paymentStatus: orderStatus.payment?.status,
+			deliveryStatus: orderStatus.lineItems?.[0]?.delivery?.status,
+		});
+
+		return c.json(orderStatus, 200);
+	} catch (error) {
+		if (error instanceof CrossmintGetOrderError) {
+			console.error("[orders] Failed to fetch order status", {
+				orderId: paramsParsed.data.orderId,
+				message: error.message,
+				status: error.status,
+				details: error.details,
+			});
+
+			if (error.status === 404) {
+				return c.json(
+					{
+						error: "Order not found",
+						orderId: paramsParsed.data.orderId,
+					},
+					404,
+				);
+			}
+
+			if (error.status === 403) {
+				return c.json(
+					{
+						error: "Invalid client secret or access denied",
+					},
+					403,
+				);
+			}
+
+			return c.json(
+				{
+					error: error.message,
+					details: error.details,
+				},
+				error.status,
+			);
+		}
+
+		console.error("[orders] Unexpected error fetching order status", {
+			orderId: paramsParsed.data.orderId,
+			error,
+		});
+
+		return c.json(
+			{
+				error: "Failed to fetch order status",
+			},
+			500,
+		);
+	}
 };
 
 export const buildCreateOrderHandler =
@@ -146,6 +298,7 @@ export const buildCreateOrderHandler =
 					email,
 					payerAddress,
 					network: config.paymentMethod,
+					clientSecret: response.clientSecret,
 				});
 			} catch (databaseError) {
 				console.error("[orders] Failed to persist order record", {

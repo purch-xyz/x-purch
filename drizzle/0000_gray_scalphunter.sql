@@ -3,6 +3,7 @@ CREATE TABLE "orders_x402" (
 	"id" uuid PRIMARY KEY NOT NULL,
 	"user_id" uuid NOT NULL,
 	"network" "x402_network" NOT NULL,
+	"client_secret" text NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
