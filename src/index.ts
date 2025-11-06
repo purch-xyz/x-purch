@@ -4,6 +4,7 @@ import { decodePayment } from "x402/schemes";
 import { svm } from "x402/shared";
 import { paymentMiddleware, type SolanaAddress } from "x402-hono";
 import { env } from "./env";
+import { createValidationMiddleware } from "./middleware/validation";
 import {
 	buildCreateOrderHandler,
 	getOrderStatusHandler,
@@ -68,6 +69,8 @@ const createPayerLoggingMiddleware = (
 
 const app = new Hono();
 
+app.use("/orders/solana", createValidationMiddleware(solanaCreateOrderSchema));
+
 app.use(
 	"/orders/solana",
 	paymentMiddleware(
@@ -86,6 +89,7 @@ app.use(
 		facilitatorConfig,
 	),
 );
+
 app.use("/orders/solana", createPayerLoggingMiddleware("solana"));
 
 app.post(

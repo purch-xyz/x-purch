@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import bcrypt from "bcrypt";
 import { eq } from "drizzle-orm";
 import type { Context } from "hono";
 import type { ZodType } from "zod";
@@ -37,6 +39,12 @@ interface SaveOrderParams {
 	clientSecret: string;
 }
 
+const SALT_ROUNDS = 10;
+
+const hashClientSecret = (secret: string): string => {
+	return createHash("sha256").update(secret).digest("hex");
+};
+
 const saveOrderRecord = async ({
 	orderId,
 	email,
@@ -44,6 +52,9 @@ const saveOrderRecord = async ({
 	network,
 	clientSecret,
 }: SaveOrderParams) => {
+	const sha256Hash = hashClientSecret(clientSecret);
+	const hashedSecret = await bcrypt.hash(sha256Hash, SALT_ROUNDS);
+
 	await db.transaction(async (tx) => {
 		const now = new Date();
 
@@ -78,7 +89,7 @@ const saveOrderRecord = async ({
 				id: orderId,
 				userId,
 				network,
-				clientSecret,
+				clientSecret: hashedSecret,
 				updatedAt: now,
 			})
 			.onConflictDoUpdate({
@@ -86,7 +97,7 @@ const saveOrderRecord = async ({
 				set: {
 					userId,
 					network,
-					clientSecret,
+					clientSecret: hashedSecret,
 					updatedAt: now,
 				},
 			});
@@ -131,49 +142,51 @@ export const getOrderStatusHandler = async (c: Context) => {
 		hasAuth: Boolean(authorization),
 	});
 
-	try {
-		const [orderRecord] = await db
-			.select({
-				clientSecret: orders.clientSecret,
-			})
-			.from(orders)
-			.where(eq(orders.id, paramsParsed.data.orderId))
-			.limit(1);
+	const [orderRecord] = await db
+		.select({
+			clientSecret: orders.clientSecret,
+		})
+		.from(orders)
+		.where(eq(orders.id, paramsParsed.data.orderId))
+		.limit(1);
 
-		if (!orderRecord) {
-			console.log("[orders] Order not found in database", {
-				orderId: paramsParsed.data.orderId,
-			});
-			return c.json(
-				{
-					error: "Order not found",
-					orderId: paramsParsed.data.orderId,
-				},
-				404,
-			);
-		}
-
-		if (orderRecord.clientSecret !== headersParsed.data.authorization) {
-			console.log("[orders] Invalid client secret", {
-				orderId: paramsParsed.data.orderId,
-			});
-			return c.json(
-				{
-					error: "Invalid client secret or access denied",
-				},
-				403,
-			);
-		}
-	} catch (dbError) {
-		console.error("[orders] Database error validating client secret", {
+	if (!orderRecord) {
+		console.log("[orders] Order not found in database", {
 			orderId: paramsParsed.data.orderId,
-			error: dbError,
 		});
 		return c.json(
 			{
-				error: "Failed to validate authorization",
+				error: "Order not found",
+				orderId: paramsParsed.data.orderId,
 			},
-			500,
+			404,
+		);
+	}
+
+	let isValidSecret = false;
+	try {
+		const sha256Hash = hashClientSecret(headersParsed.data.authorization);
+		isValidSecret = await bcrypt.compare(sha256Hash, orderRecord.clientSecret);
+	} catch (bcryptError) {
+		console.error("[orders] Bcrypt comparison error", {
+			orderId: paramsParsed.data.orderId,
+			error:
+				bcryptError instanceof Error
+					? bcryptError.message
+					: String(bcryptError),
+		});
+		isValidSecret = false;
+	}
+
+	if (!isValidSecret) {
+		console.log("[orders] Invalid client secret", {
+			orderId: paramsParsed.data.orderId,
+		});
+		return c.json(
+			{
+				error: "Invalid client secret or access denied",
+			},
+			403,
 		);
 	}
 
@@ -244,32 +257,37 @@ export const buildCreateOrderHandler =
 		config: CreateOrderHandlerConfig<TSchema>,
 	) =>
 	async (c: Context) => {
-		let rawBody: unknown;
+		let payload = c.get("validatedBody") as CreateOrderPayload;
 
-		try {
-			rawBody = await c.req.json();
-		} catch {
-			return c.json(
-				{
-					error: "Invalid JSON payload",
-				},
-				400,
-			);
+		if (!payload) {
+			let rawBody: unknown;
+
+			try {
+				rawBody = await c.req.json();
+			} catch {
+				return c.json(
+					{
+						error: "Invalid JSON payload",
+					},
+					400,
+				);
+			}
+
+			const parsed = config.schema.safeParse(rawBody);
+
+			if (!parsed.success) {
+				return c.json(
+					{
+						error: "Invalid request body",
+						issues: parsed.error.flatten(),
+					},
+					400,
+				);
+			}
+
+			payload = parsed.data;
 		}
 
-		const parsed = config.schema.safeParse(rawBody);
-
-		if (!parsed.success) {
-			return c.json(
-				{
-					error: "Invalid request body",
-					issues: parsed.error.flatten(),
-				},
-				400,
-			);
-		}
-
-		const payload = parsed.data;
 		const { email, payerAddress, locale, physicalAddress, productUrl } =
 			payload;
 
