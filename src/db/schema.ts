@@ -38,6 +38,7 @@ export const orders = pgTable("orders_x402", {
 		.notNull()
 		.references(() => users.id, { onDelete: "cascade" }),
 	network: x402Network("network").notNull(),
+	clientSecret: text("client_secret").notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true })
 		.defaultNow()
 		.notNull(),

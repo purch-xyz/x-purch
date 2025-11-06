@@ -1,7 +1,6 @@
 import { z } from "zod";
 
 const solanaAddressRegex = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
-const evmAddressRegex = /^0x[0-9a-fA-F]{40}$/;
 
 const physicalAddressSchema = z.object({
 	name: z.string().min(1),
@@ -32,11 +31,10 @@ export const solanaCreateOrderSchema = baseRequestSchema.extend({
 		),
 });
 
-export const baseCreateOrderSchema = baseRequestSchema.extend({
-	payerAddress: z
-		.string()
-		.regex(evmAddressRegex, "payerAddress must be a valid EVM address"),
+export const getOrderStatusParamsSchema = z.object({
+	orderId: z.string().uuid(),
 });
 
-export type SolanaCreateOrderInput = z.infer<typeof solanaCreateOrderSchema>;
-export type BaseCreateOrderInput = z.infer<typeof baseCreateOrderSchema>;
+export const getOrderStatusHeadersSchema = z.object({
+	authorization: z.string().min(1),
+});
