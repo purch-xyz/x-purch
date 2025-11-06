@@ -1,0 +1,37 @@
+@font-face {
+	font-family: "Cheltenham Condensed";
+	src: url("../assets/Cheltenham Condensed Bold/Cheltenham Condensed Bold.otf")
+		format("opentype");
+	font-weight: 700;
+	font-style: normal;
+}
+
+@font-face {
+	font-family: "Franklin Gothic Demi Cond";
+	src: url("../assets/Franklin Gothic Demi Cond Regular/Franklin Gothic Demi Cond Regular.ttf")
+		format("truetype");
+	font-weight: 600;
+	font-style: normal;
+}
+
+:root {
+	font-family: "Cheltenham Condensed", "Times New Roman", serif;
+	color: #000000;
+	background-color: #f2f0ed;
+	text-rendering: optimizeLegibility;
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+}
+
+body {
+	margin: 0;
+	min-height: 100vh;
+	background-color: #f2f0ed;
+	position: relative;
+	box-shadow: inset 0 0 111px rgba(249, 234, 212, 0.6);
+}
+
+#root {
+	position: relative;
+	z-index: 1;
+}

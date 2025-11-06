@@ -1,5 +1,6 @@
 import { createFacilitatorConfig } from "@coinbase/x402";
 import { Hono, type MiddlewareHandler } from "hono";
+import { cors } from "hono/cors";
 import type { Address } from "viem";
 import { decodePayment } from "x402/schemes";
 import { svm } from "x402/shared";
@@ -68,6 +69,37 @@ const createPayerLoggingMiddleware = (
 };
 
 const app = new Hono();
+
+const allowedOrigins = [
+	"http://localhost:5173",
+	"http://127.0.0.1:5173",
+	"http://localhost:4173",
+	"http://127.0.0.1:4173",
+];
+
+app.use(
+	"*",
+	cors({
+		origin: (origin) => {
+			if (!origin) return null;
+			if (allowedOrigins.includes(origin)) {
+				return origin;
+			}
+			return null;
+		},
+		allowMethods: ["GET", "POST", "OPTIONS"],
+		allowHeaders: [
+			"Content-Type",
+			"X-PAYMENT",
+			"X-PAYMENT-RESPONSE",
+			"Authorization",
+			"Access-Control-Expose-Headers",
+			"access-control-expose-headers",
+		],
+		exposeHeaders: ["X-PAYMENT-RESPONSE"],
+		credentials: true,
+	}),
+);
 
 app.use(
 	"/orders/solana",

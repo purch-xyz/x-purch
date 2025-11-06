@@ -95,7 +95,9 @@ const main = async () => {
 		const publicKeyString = keypair.publicKey.toBase58();
 		console.log("Using Solana wallet:", publicKeyString);
 
-		const connection = new Connection("https://api.mainnet-beta.solana.com");
+		const connection = new Connection(
+			"https://solana-mainnet.g.alchemy.com/v2/OnI57N1mjgf7WXqXYg4NGCZPMV3MYmMI",
+		);
 		try {
 			const balance = await connection.getBalance(keypair.publicKey);
 			console.log("Current SOL balance:", balance / 1e9);

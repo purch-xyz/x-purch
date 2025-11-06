@@ -4,7 +4,8 @@ import { Connection, Keypair, Transaction } from "@solana/web3.js";
 import bs58 from "bs58";
 
 const RPC_URL =
-	process.env.SOLANA_RPC_URL ?? "https://api.mainnet-beta.solana.com";
+	process.env.SOLANA_RPC_URL ??
+	"https://solana-mainnet.g.alchemy.com/v2/OnI57N1mjgf7WXqXYg4NGCZPMV3MYmMI";
 
 const prompt = async (label: string) => {
 	const rl = readline.createInterface({ input, output });
