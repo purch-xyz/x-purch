@@ -124,6 +124,9 @@ app.use(
 				price: "$0.01",
 				network: "solana",
 				config: {
+					resource: "https://x402.purch.xyz/",
+					maxTimeoutSeconds: 300,
+					mimeType: "application/json",
 					description:
 						"Create an e-commerce order (Amazon, Shopify, etc.) paid with USDC on Solana. Includes product fulfillment to physical address.",
 					discoverable: true,
