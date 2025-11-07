@@ -131,7 +131,6 @@ app.use(
 						"Create an e-commerce order (Amazon, Shopify, etc.) paid with USDC on Solana. Includes product fulfillment to physical address.",
 					discoverable: true,
 					inputSchema: {
-						bodyType: "json",
 						bodyFields: {
 							email: {
 								type: "string",
