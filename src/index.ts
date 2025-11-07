@@ -69,6 +69,50 @@ const createPayerLoggingMiddleware = (
 
 const app = new Hono();
 
+// Trust proxy headers for proper HTTPS detection behind load balancers
+app.use("*", async (c, next) => {
+	// Google Cloud Run and most proxies set X-Forwarded-Proto
+	const proto =
+		c.req.header("X-Forwarded-Proto") || c.req.header("x-forwarded-proto");
+	const host = c.req.header("X-Forwarded-Host") || c.req.header("Host");
+
+	if (proto === "https" && host) {
+		// Override the request URL to use HTTPS
+		const originalUrl = new URL(c.req.url);
+		const httpsUrl = `https://${host}${originalUrl.pathname}${originalUrl.search}`;
+
+		console.log("[Proxy Fix] Rewriting URL for HTTPS behind proxy", {
+			originalUrl: c.req.url,
+			httpsUrl,
+			xForwardedProto: proto,
+			xForwardedHost: host,
+			path: `${c.req.method} ${originalUrl.pathname}`,
+		});
+
+		// Create a new Request with the corrected URL
+		const newRequest = new Request(httpsUrl, {
+			method: c.req.method,
+			headers: c.req.raw.headers,
+			body: c.req.raw.body,
+		});
+
+		// Replace the request context
+		Object.defineProperty(c.req, "raw", {
+			value: newRequest,
+			writable: false,
+			configurable: true,
+		});
+
+		Object.defineProperty(c.req, "url", {
+			value: httpsUrl,
+			writable: false,
+			configurable: true,
+		});
+	}
+
+	await next();
+});
+
 app.use("/orders/solana", createPayerLoggingMiddleware("solana"));
 
 app.use(
