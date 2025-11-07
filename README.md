@@ -1,45 +1,156 @@
-# purch api
+# Purch API
 
-hey there—this repo holds the hono api that powers our purch experiments. it's running on bun, pulls its config from `src/env.ts`, and talks to supabase through drizzle.
+This is the backend for Purch — our hackathon project showcasing an x402-powered checkout using USDC on Solana, with fulfillment handled via Crossmint and persistence in Supabase. We open-sourced the code for transparency and to help judges and reviewers run the demo locally.
 
-## what you get
-- a hono app in `src/index.ts` that's already wired for routing.
-- drizzle orm with an `orders` table (`id`, `status`, `created_at`, `updated_at`) defined in `src/db/schema.ts`.
-- a postgres client in `src/db/client.ts`, configured to use the supabase service role url with strict ssl.
+## Live Service
+- API base: https://x402.purch.xyz
+- Health: https://x402.purch.xyz/health
+- Docs: https://x402.purch.xyz/docs
+- Create order (POST): https://x402.purch.xyz/orders/solana
 
-## setup
-1. install the bun runtime if you haven't: `curl -fsSL https://bun.sh/install | bash`
-2. install deps: `bun install`
+## Why It Matters
+- **x402-native checkout** – Every POST to `/orders/solana` runs through Coinbase's x402 middleware for signed, enforceable paywalls.
+- **USDC on Solana** – Fast, low-fee payments; payer identity is logged for auditing.
+- **Crossmint fulfillment** – Commerce APIs handle order creation and delivery state.
+- **Type-safe infra** – Zod, Drizzle ORM, and Biome for safety and clarity.
+- **Self-discoverable** – `/docs` exposes an OpenAPI spec; logs are verbose for demoing.
 
-drop a `.env` file at the project root with:
+## Architecture at a Glance
 ```
-SUPABASE_DATABASE_URL="postgres://service-role:@supabase-url"
+Client (wallet + x402 signer)
+        │
+        ▼
+POST /orders/solana  ──► Hono router ──► x402 middleware (pricing, signature, payer logging)
+        │
+        ├─► Validation (Zod schemas + custom middleware)
+        ├─► Crossmint order creation + serialized Solana transaction
+        └─► Drizzle ORM ➜ Supabase/Postgres (orders + users tables)
+
+GET /orders/:id ──► bcrypt-secured status lookup that proxies Crossmint order state
 ```
-the schema in `src/env.ts` will crash fast if that value is missing or malformed, so you know right away when something's off.
 
-## daily commands
-- dev server with hot reload: `bun run dev` (listens on http://localhost:3000)
-- lint the codebase: `bun run lint`
-- auto-fix lint issues when possible: `bun run lint:fix`
-- format everything with biome: `bun run format`
-- run tests: `bun test`
+## Quick Start
+1. **Prereqs**
+	- [Bun](https://bun.sh) v1.1+
+	- Postgres/Supabase URL with service role credentials
+	- Solana wallet capable of receiving x402 payments
+	- Crossmint server-side API key
+2. **Install**
+	```bash
+	bun install
+	```
+3. **Configure**
+	- Create a `.env` file (or update the existing one) with the variables below.
+	- Run `bun run dev` and hit `http://localhost:3000/health`.
 
-## database workflow
-- generate sql migrations from the drizzle schema: `bun run db:generate`
-- push migrations to supabase: `bun run db:migrate`
-- open drizzle studio against the same database: `bun run db:studio`
+### Required Environment Variables
+| Name | Description |
+| --- | --- |
+| `SUPABASE_DATABASE_URL` | Postgres URL with `sslmode=require`; Supabase service-role is ideal. |
+| `NODE_ENV` | `development`, `test`, or `production`. Defaults to `production`. |
+| `CROSSMINT_API_KEY` | Server-side Crossmint key for order creation/status. |
+| `CROSSMINT_API_BASE_URL` | Optional override for Crossmint's REST endpoint. |
+| `X402_SOLANA_WALLET_ADDRESS` | Solana wallet that receives the x402 challenge payment. |
+| `X402_CDP_API_KEY_ID` / `X402_CDP_API_KEY_SECRET` | Coinbase CDP API credentials for x402. |
 
-generated sql lands in the `drizzle/` folder. keep schema changes in `src/db/` and let the commands handle the rest.
+Missing or malformed values cause `src/env.ts` to throw before the server boots.
 
-## project layout
+### Daily Commands
+| Action | Command |
+| --- | --- |
+| Start dev server (hot reload) | `bun run dev` |
+| Lint (Biome) | `bun run lint` |
+| Lint + fix | `bun run lint:fix` |
+| Format | `bun run format` |
+| Tests | `bun test` |
+| Generate Drizzle SQL | `bun run db:generate` |
+| Push migrations | `bun run db:migrate` |
+| Drizzle Studio | `bun run db:studio` |
+
+## API Tour
+### Create an order (USDC on Solana)
+1. Sign the x402 challenge returned from the first request.
+2. Re-run the call with the `X-PAYMENT` header.
+
+```bash
+curl -X POST http://localhost:3000/orders/solana \
+  -H "Content-Type: application/json" \
+  -H "X-PAYMENT: <serialized x402 payment>" \
+  -d '{
+    "email": "satoshi@example.com",
+    "payerAddress": "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM",
+    "productUrl": "https://www.amazon.com/dp/B08N5WRWNW",
+    "physicalAddress": {
+      "name": "Satoshi Nakamoto",
+      "line1": "1 Market St",
+      "city": "San Francisco",
+      "postalCode": "94105",
+      "country": "US"
+    },
+    "locale": "en-US"
+  }'
+```
+
+Response (201):
+```json
+{
+  "orderId": "550e8400-e29b-41d4-a716-446655440000",
+  "clientSecret": "eyXams...",
+  "serializedTransaction": "AQABAg...",
+  "paymentStatus": "pending",
+  "lineItems": [...]
+}
+```
+
+### Check order status
+```bash
+curl http://localhost:3000/orders/550e8400-e29b-41d4-a716-446655440000 \
+  -H "Authorization: <clientSecret>"
+```
+Returns the upstream Crossmint order payload, including payment, quote, and delivery states. Invalid secrets receive `403`.
+
+### Discoverable helpers
+- `GET /` – service metadata and handy links
+- `GET /docs` – generated OpenAPI description (mirrors the handler definitions in `src/index.ts`)
+- `GET /health` – readiness probe for monitors or deployment platforms
+
+## Database + Drizzle Workflow
+- Schemas live in `src/db/schema.ts` and are the single source of truth.
+- `bun run db:generate` diffs the schema and drops SQL into `drizzle/`.
+- `bun run db:migrate` applies migrations against the Supabase database configured in `.env`.
+- `bun run db:studio` opens Drizzle Studio for live table inspection.
+
+Tables included:
+- `users` – wallet address + network + email for auditing
+- `orders` – x402 payment metadata, hashed encrypted client secrets, timestamps
+
+## Testing & Observability
+- Use `bun test` for colocated `*.test.ts` suites (example: add `orders/handlers.test.ts`).
+- Request/response logging is intentionally verbose (`console.log`/`console.error`) so you can follow each step without attaching a profiler.
+- Validation failures return flattened Zod error payloads to help frontends debug quickly.
+
+## Project Layout
 ```
 src/
-  index.ts         hono entrypoint
-  env.ts           zod-powered runtime config
+  index.ts            # Hono router + x402 wiring + route registration
+  env.ts              # @t3-oss/env-core schema that validates Bun.env at boot
+  middleware/         # Shared validation middleware
+  orders/             # Crossmint client, schemas, and route handlers
   db/
-    schema.ts      drizzle table definitions
-    client.ts      postgres + drizzle client
-drizzle/           generated migrations
+    schema.ts         # Drizzle schema + enums
+    client.ts         # postgres client with SSL + connection pooling
+drizzle/              # Generated SQL migrations
 ```
 
-update routes under `src/` as features grow, keep tests beside the files they cover, and lean on bun's speed for the tight inner loop.
+## Deployment Notes
+- The server is edge-friendly: `bun run src/index.ts` is stateless outside of Postgres.
+- Supply production secrets via environment variables; the app fails fast if anything is missing.
+- Health check is `GET /health`; load balancers can use it for readiness.
+- To ship a public demo, point your x402 credentials to Coinbase's production CDP environment and update `SUPABASE_DATABASE_URL` to the managed database.
+
+## Demo Tips
+1. Run `bun run dev`, call `POST /orders/solana`, approve the x402 challenge, then show `GET /orders/:id` updating.
+2. Show logs from the payer logging middleware to visualize wallet attribution.
+
+
+Questions or ideas? Please open an issue. We welcome feedback!
