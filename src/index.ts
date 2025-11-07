@@ -124,7 +124,7 @@ app.use(
 				price: "$0.01",
 				network: "solana",
 				config: {
-					resource: "https://x402.purch.xyz/",
+					resource: "https://x402.purch.xyz/orders/solana",
 					maxTimeoutSeconds: 300,
 					mimeType: "application/json",
 					description:
