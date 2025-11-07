@@ -306,11 +306,14 @@ app.get("/test-facilitator", async (c) => {
 		});
 	} catch (error) {
 		console.error("[TEST] Facilitator test failed:", error);
-		return c.json({
-			success: false,
-			error: error instanceof Error ? error.message : String(error),
-			stack: error instanceof Error ? error.stack : undefined,
-		}, 500);
+		return c.json(
+			{
+				success: false,
+				error: error instanceof Error ? error.message : String(error),
+				stack: error instanceof Error ? error.stack : undefined,
+			},
+			500,
+		);
 	}
 });
 
