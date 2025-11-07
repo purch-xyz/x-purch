@@ -70,6 +70,7 @@ const createPayerLoggingMiddleware = (
 const app = new Hono();
 
 app.use("/orders/solana", createValidationMiddleware(solanaCreateOrderSchema));
+app.use("/orders/solana", createPayerLoggingMiddleware("solana"));
 
 app.use(
 	"/orders/solana",
@@ -170,8 +171,6 @@ app.use(
 		facilitatorConfig,
 	),
 );
-
-app.use("/orders/solana", createPayerLoggingMiddleware("solana"));
 
 app.post(
 	"/orders/solana",
