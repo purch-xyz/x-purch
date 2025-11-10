@@ -173,7 +173,8 @@ app.use(
 									city: { type: "string", description: "City", required: true },
 									state: {
 										type: "string",
-										description: "State/Province (optional)",
+										description:
+											"State/Province (optional, 2-letter code, e.g., CA)",
 									},
 									postalCode: {
 										type: "string",
@@ -478,7 +479,8 @@ app.get("/docs", (c) => {
 												},
 												state: {
 													type: "string",
-													description: "State/Province (optional)",
+													description:
+														"State/Province (optional, 2-letter code)",
 													example: "CA",
 												},
 												postalCode: {
