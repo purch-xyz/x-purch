@@ -8,22 +8,145 @@ import { type Address, address as toAddress } from "@solana/addresses";
 import type { SignatureBytes } from "@solana/keys";
 import type { TransactionSigner } from "@solana/signers";
 import type { Transaction as KitTransaction } from "@solana/transactions";
-import { useWallet } from "@solana/wallet-adapter-react";
+import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { useWalletModal } from "@solana/wallet-adapter-react-ui";
-import { VersionedMessage, VersionedTransaction } from "@solana/web3.js";
+import {
+	Transaction,
+	VersionedMessage,
+	VersionedTransaction,
+} from "@solana/web3.js";
+import bs58 from "bs58";
 
 const API_BASE_URL =
 	import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3000";
 const SOLANA_RPC_URL = import.meta.env.VITE_SOLANA_RPC_URL ?? "";
 
+const decodeSerializedTransaction = (value: string): Uint8Array => {
+	const sanitized = value.replace(/\s+/g, "");
+
+	const tryBase64 = (): Uint8Array | null => {
+		let normalized = sanitized.replace(/-/g, "+").replace(/_/g, "/");
+		const remainder = normalized.length % 4;
+		if (remainder > 0) {
+			normalized = normalized.padEnd(normalized.length + (4 - remainder), "=");
+		}
+
+		const invalidChars = normalized.replace(/[A-Za-z0-9+/=]/g, "");
+		if (invalidChars.length > 0) {
+			return null;
+		}
+
+		try {
+			const binaryString = atob(normalized);
+			const bytes = new Uint8Array(binaryString.length);
+			for (let i = 0; i < binaryString.length; i += 1) {
+				bytes[i] = binaryString.charCodeAt(i);
+			}
+			return bytes;
+		} catch (error) {
+			console.warn("[frontend] Base64 decode attempt failed", {
+				error:
+					error instanceof Error
+						? error.message
+						: "unknown base64 decode error",
+				length: normalized.length,
+				headSnippet: normalized.slice(0, 32),
+				tailSnippet: normalized.slice(-32),
+			});
+			return null;
+		}
+	};
+
+	const tryBase58 = (): Uint8Array | null => {
+		try {
+			const decoded = bs58.decode(sanitized);
+			console.info("[frontend] Decoded serialized transaction via base58", {
+				inputLength: sanitized.length,
+				outputLength: decoded.length,
+			});
+			return Uint8Array.from(decoded);
+		} catch (error) {
+			console.warn("[frontend] Base58 decode attempt failed", {
+				error:
+					error instanceof Error
+						? error.message
+						: "unknown base58 decode error",
+				length: sanitized.length,
+			});
+			return null;
+		}
+	};
+
+	const base64Result = tryBase64();
+	if (base64Result) {
+		return base64Result;
+	}
+
+	const base58Result = tryBase58();
+	if (base58Result) {
+		return base58Result;
+	}
+
+	throw new Error(
+		"Serialized transaction could not be decoded as base64 or base58.",
+	);
+};
+
+const extractAmountLabel = (
+	response: CrossmintOrderResponse,
+): string | null => {
+	const quote = response.quote as
+		| {
+				totalPrice?: { amount?: string; currency?: string };
+		  }
+		| undefined;
+
+	if (quote?.totalPrice?.amount && quote.totalPrice.currency) {
+		return `${quote.totalPrice.amount} ${quote.totalPrice.currency}`;
+	}
+
+	const orderDetails = response.order as
+		| {
+				payment?: {
+					amount?: string;
+					currency?: string;
+					total?: { amount?: string; currency?: string };
+				};
+		  }
+		| undefined;
+
+	const payment = orderDetails?.payment;
+
+	if (payment?.total?.amount && payment.total.currency) {
+		return `${payment.total.amount} ${payment.total.currency}`;
+	}
+
+	if (payment?.amount && (payment.currency || response.paymentCurrency)) {
+		return `${payment.amount} ${payment.currency ?? response.paymentCurrency}`;
+	}
+
+	const lineItems = response.lineItems as
+		| Array<{ price?: { amount?: string; currency?: string } }>
+		| undefined;
+	if (Array.isArray(lineItems)) {
+		for (const item of lineItems) {
+			const amount = item?.price?.amount;
+			const currency = item?.price?.currency ?? response.paymentCurrency;
+			if (amount && currency) {
+				return `${amount} ${currency}`;
+			}
+		}
+	}
+
+	return response.paymentCurrency ?? null;
+};
+
 interface OrderForm {
 	email: string;
 	payerAddress: string;
-	locale: string;
 	productUrl: string;
 	name: string;
 	line1: string;
-	line2: string;
 	city: string;
 	state: string;
 	postalCode: string;
@@ -41,11 +164,9 @@ type Step =
 const initialForm: OrderForm = {
 	email: "",
 	payerAddress: "",
-	locale: "en-US",
 	productUrl: "",
 	name: "",
 	line1: "",
-	line2: "",
 	city: "",
 	state: "",
 	postalCode: "",
@@ -55,12 +176,10 @@ const initialForm: OrderForm = {
 interface OrderPayload {
 	email: string;
 	payerAddress: string;
-	locale?: string;
 	productUrl: string;
 	physicalAddress: {
 		name: string;
 		line1: string;
-		line2?: string;
 		city: string;
 		state?: string;
 		postalCode: string;
@@ -78,11 +197,9 @@ interface ResultState {
 const fieldLabels: Record<keyof OrderForm, string> = {
 	email: "Email",
 	payerAddress: "Payer Wallet Address",
-	locale: "Locale",
 	productUrl: "Product URL",
 	name: "Recipient Name",
-	line1: "Address Line 1",
-	line2: "Address Line 2",
+	line1: "Address Line",
 	city: "City",
 	state: "State / Region",
 	postalCode: "Postal Code",
@@ -92,11 +209,9 @@ const fieldLabels: Record<keyof OrderForm, string> = {
 const fieldOrder: (keyof OrderForm)[] = [
 	"email",
 	"payerAddress",
-	"locale",
 	"productUrl",
 	"name",
 	"line1",
-	"line2",
 	"city",
 	"state",
 	"postalCode",
@@ -108,6 +223,15 @@ const App = () => {
 	const [step, setStep] = useState<Step>("idle");
 	const [result, setResult] = useState<ResultState>({});
 	const [lastPayload, setLastPayload] = useState<OrderPayload | null>(null);
+	const [pendingTransfer, setPendingTransfer] = useState<{
+		transaction: VersionedTransaction | Transaction;
+		amountLabel: string | null;
+	} | null>(null);
+	const [sendingTransfer, setSendingTransfer] = useState(false);
+	const [transferError, setTransferError] = useState<string | null>(null);
+	const [transferSignature, setTransferSignature] = useState<string | null>(
+		null,
+	);
 	type PaymentRequirement = ReturnType<typeof selectPaymentRequirements>;
 
 	const [paymentRequirements, setPaymentRequirements] =
@@ -119,8 +243,10 @@ const App = () => {
 		disconnect,
 		signTransaction,
 		signAllTransactions,
+		sendTransaction,
 	} = useWallet();
 	const { setVisible: setWalletModalVisible } = useWalletModal();
+	const { connection } = useConnection();
 
 	useEffect(() => {
 		setForm((prev) => ({
@@ -158,6 +284,73 @@ const App = () => {
 	}, [paymentRequirements]);
 
 	const hasSuccess = step === "success" && Boolean(result.response);
+
+	const selectedItem = useMemo(() => {
+		if (!result.response) {
+			return null;
+		}
+
+		const collectLineItems = (
+			source: unknown,
+		): Array<
+			| {
+					metadata?: {
+						name?: string;
+						description?: string;
+						imageUrl?: string;
+					};
+					quote?: {
+						totalPrice?: {
+							amount?: string;
+							currency?: string;
+						};
+						charges?: {
+							unit?: {
+								amount?: string;
+								currency?: string;
+							};
+						};
+					};
+			  }
+			| undefined
+		> => {
+			return Array.isArray(source) ? source : [];
+		};
+
+		const lineItems =
+			collectLineItems(result.response.lineItems) ??
+			collectLineItems(
+				(result.response.order as { lineItems?: unknown } | undefined)
+					?.lineItems,
+			);
+
+		const [firstItem] = lineItems ?? [];
+		if (!firstItem) {
+			return null;
+		}
+
+		const metadata = firstItem.metadata ?? {};
+		const title = metadata.name ?? null;
+		const imageUrl = metadata.imageUrl ?? null;
+
+		const price =
+			firstItem.quote?.totalPrice ?? firstItem.quote?.charges?.unit ?? null;
+
+		const priceAmount = price?.amount;
+		const priceCurrency = price?.currency ?? result.response.paymentCurrency;
+
+		const priceLabel =
+			priceAmount && priceCurrency ? `${priceAmount} ${priceCurrency}` : null;
+
+		if (!title && !imageUrl && !priceLabel) {
+			return null;
+		}
+
+		return {
+			title,
+			imageUrl,
+		};
+	}, [result.response]);
 
 	const updateField = <T extends keyof OrderForm>(field: T, value: string) => {
 		setForm((prev) => ({
@@ -258,6 +451,37 @@ const App = () => {
 		versionedSignaturesToRecord,
 	]);
 
+	const finalizeOrderPayment = useCallback(async () => {
+		if (!pendingTransfer) {
+			return;
+		}
+
+		if (!sendTransaction) {
+			setTransferError("Connected wallet cannot send transactions.");
+			return;
+		}
+
+		setSendingTransfer(true);
+		setTransferError(null);
+
+		try {
+			const signature = await sendTransaction(
+				pendingTransfer.transaction,
+				connection,
+				{
+					skipPreflight: false,
+				},
+			);
+
+			setTransferSignature(signature);
+			setPendingTransfer(null);
+		} catch (error) {
+			setTransferError(error instanceof Error ? error.message : String(error));
+		} finally {
+			setSendingTransfer(false);
+		}
+	}, [pendingTransfer, sendTransaction, connection]);
+
 	const shortAddress = useMemo(() => {
 		if (!form.payerAddress) {
 			return "";
@@ -265,15 +489,59 @@ const App = () => {
 		return `${form.payerAddress.slice(0, 4)}...${form.payerAddress.slice(-4)}`;
 	}, [form.payerAddress]);
 
+	const applyOrderResult = (
+		data: CrossmintOrderResponse,
+		rawHeader: string | null,
+	) => {
+		setResult({
+			response: data,
+			rawHeader,
+		});
+		setLastPayload(null);
+		setPaymentRequirements(null);
+		setX402Version(null);
+
+		const amountLabel = extractAmountLabel(data);
+
+		if (data.serializedTransaction) {
+			try {
+				const raw = decodeSerializedTransaction(data.serializedTransaction);
+				let transaction: VersionedTransaction | Transaction;
+
+				try {
+					transaction = VersionedTransaction.deserialize(raw);
+				} catch {
+					transaction = Transaction.from(raw);
+				}
+
+				setPendingTransfer({ transaction, amountLabel });
+				setTransferError(null);
+				setTransferSignature(null);
+			} catch (decodeError) {
+				setPendingTransfer(null);
+				setTransferSignature(null);
+				setTransferError(
+					decodeError instanceof Error
+						? `Failed to decode order payment transaction: ${decodeError.message}`
+						: "Failed to decode order payment transaction.",
+				);
+			}
+		} else {
+			setPendingTransfer(null);
+			setTransferSignature(null);
+			setTransferError(null);
+		}
+
+		setStep("success");
+	};
+
 	const buildPayload = (): OrderPayload => ({
 		email: form.email.trim(),
 		payerAddress: form.payerAddress.trim(),
-		locale: form.locale.trim() || undefined,
 		productUrl: form.productUrl.trim(),
 		physicalAddress: {
 			name: form.name.trim(),
 			line1: form.line1.trim(),
-			line2: form.line2.trim() || undefined,
 			city: form.city.trim(),
 			state: form.state.trim() || undefined,
 			postalCode: form.postalCode.trim(),
@@ -290,6 +558,9 @@ const App = () => {
 		setPaymentRequirements(null);
 		setX402Version(null);
 		setLastPayload(null);
+		setPendingTransfer(null);
+		setTransferSignature(null);
+		setTransferError(null);
 
 		if (!publicKey) {
 			setResult({
@@ -356,12 +627,8 @@ const App = () => {
 			}
 
 			const data = (await response.json()) as CrossmintOrderResponse;
-			setResult({
-				response: data,
-				rawHeader: response.headers.get("x-payment-response"),
-			});
-			setLastPayload(null);
-			setStep("success");
+			const rawHeader = response.headers.get("x-payment-response");
+			applyOrderResult(data, rawHeader);
 		} catch (error) {
 			setResult({
 				errorMessage: error instanceof Error ? error.message : String(error),
@@ -432,14 +699,7 @@ const App = () => {
 
 			const data = (await response.json()) as CrossmintOrderResponse;
 			const rawHeader = response.headers.get("x-payment-response");
-			setResult({
-				response: data,
-				rawHeader,
-			});
-			setLastPayload(null);
-			setPaymentRequirements(null);
-			setX402Version(null);
-			setStep("success");
+			applyOrderResult(data, rawHeader);
 		} catch (error) {
 			setResult({
 				errorMessage: error instanceof Error ? error.message : String(error),
@@ -465,7 +725,6 @@ const App = () => {
 			<img src={logo} alt="Purch logo" className="logoMark" />
 			<header className="hero">
 				<h1 className="title strong">X-Purch Console</h1>
-				<p className="title blurb">X-Purch is a x402-powered checkout</p>
 				<p className="lede steps">
 					1. Connect your Solana wallet
 					<br />
@@ -502,14 +761,13 @@ const App = () => {
 						<div className="grid">
 							{fieldOrder.map((key) => {
 								const value = form[key];
-								const isOptional = key === "line2" || key === "locale";
 								const isWalletField = key === "payerAddress";
 
 								return (
 									<label key={key} className="field">
 										<span className="fieldLabel">{fieldLabels[key]}</span>
 										<input
-											required={!isOptional && !isWalletField}
+											required={!isWalletField}
 											value={value}
 											readOnly={isWalletField}
 											className={isWalletField ? "readOnlyField" : undefined}
@@ -525,11 +783,7 @@ const App = () => {
 													? connected && form.payerAddress
 														? shortAddress
 														: "Connect wallet"
-													: key === "line2"
-														? "Optional apartment or suite"
-														: key === "locale"
-															? "Defaults to en-US"
-															: ""
+													: ""
 											}
 										/>
 									</label>
@@ -591,9 +845,60 @@ const App = () => {
 						)}
 						{step === "success" && result.response && (
 							<div className="status success">
-								<strong>Payment settled.</strong> Order{" "}
-								<code>{result.response.orderId}</code> confirmed.
+								<strong>x402 payment settled</strong>
+								<br />
+								Order <code>{result.response.orderId}</code> confirmed.
 							</div>
+						)}
+						{step === "success" && pendingTransfer && (
+							<div className="settlementPrompt">
+								{selectedItem && (
+									<div className="itemPreview">
+										{selectedItem.imageUrl && (
+											<img
+												src={selectedItem.imageUrl}
+												alt={selectedItem.title ?? "Selected item"}
+												className="itemPreviewImage"
+											/>
+										)}
+										<div className="itemPreviewCopy">
+											{selectedItem.title && (
+												<h3 className="itemPreviewTitle">
+													{selectedItem.title}
+												</h3>
+											)}
+										</div>
+									</div>
+								)}
+								<p className="settlementNote">
+									Approve the order payment in your wallet to complete the
+									purchase.
+								</p>
+								<button
+									type="button"
+									className="primary"
+									onClick={finalizeOrderPayment}
+									disabled={sendingTransfer}
+								>
+									{sendingTransfer
+										? "Awaiting wallet confirmation…"
+										: pendingTransfer.amountLabel
+											? `Pay ${pendingTransfer.amountLabel}`
+											: "Pay Order"}
+								</button>
+								{transferError && (
+									<p className="settlementError">{transferError}</p>
+								)}
+							</div>
+						)}
+						{transferSignature && (
+							<div className="status success inlineStatus">
+								Order payment submitted. Signature:{" "}
+								<code>{transferSignature}</code>
+							</div>
+						)}
+						{transferError && !pendingTransfer && (
+							<div className="status error inlineStatus">{transferError}</div>
 						)}
 					</form>
 				</section>
@@ -636,6 +941,12 @@ const App = () => {
 									<pre className="logPre">
 										{JSON.stringify(result.response, null, 2)}
 									</pre>
+								</div>
+							)}
+							{transferSignature && (
+								<div className="logBlock">
+									<div className="logPrompt">$ order.paymentSignature</div>
+									<pre className="logPre">{transferSignature}</pre>
 								</div>
 							)}
 							{decodedHeader && (

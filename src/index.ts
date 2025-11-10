@@ -1,16 +1,16 @@
 import { createFacilitatorConfig } from "@coinbase/x402";
 import { Hono, type MiddlewareHandler } from "hono";
 import { cors } from "hono/cors";
-import type { Address } from "viem";
 import { decodePayment } from "x402/schemes";
 import { svm } from "x402/shared";
 import { paymentMiddleware, type SolanaAddress } from "x402-hono";
 import { env } from "./env";
-import { buildCreateOrderHandler } from "./orders/handlers";
+import { createValidationMiddleware } from "./middleware/validation";
 import {
-	baseCreateOrderSchema,
-	solanaCreateOrderSchema,
-} from "./orders/schemas";
+	buildCreateOrderHandler,
+	getOrderStatusHandler,
+} from "./orders/handlers";
+import { solanaCreateOrderSchema } from "./orders/schemas";
 
 const facilitatorConfig = createFacilitatorConfig(
 	env.X402_CDP_API_KEY_ID,
@@ -81,7 +81,9 @@ app.use(
 	"*",
 	cors({
 		origin: (origin) => {
-			if (!origin) return null;
+			if (!origin) {
+				return "*";
+			}
 			if (allowedOrigins.includes(origin)) {
 				return origin;
 			}
@@ -97,9 +99,11 @@ app.use(
 			"access-control-expose-headers",
 		],
 		exposeHeaders: ["X-PAYMENT-RESPONSE"],
-		credentials: true,
+		credentials: false,
 	}),
 );
+
+app.use("/orders/solana", createValidationMiddleware(solanaCreateOrderSchema));
 
 app.use(
 	"/orders/solana",
@@ -119,36 +123,8 @@ app.use(
 		facilitatorConfig,
 	),
 );
-app.use("/orders/solana", createPayerLoggingMiddleware("solana"));
 
-app.use(
-	"/orders/base",
-	paymentMiddleware(
-		env.X402_BASE_WALLET_ADDRESS as Address,
-		{
-			"POST /orders/base": {
-				price: {
-					amount: "10000",
-					asset: {
-						address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" as const,
-						decimals: 6,
-						eip712: {
-							name: "USD Coin",
-							version: "2",
-						},
-					},
-				},
-				network: "base",
-				config: {
-					description: "Create an amazon order payable with 0.01 USDC on Base",
-					discoverable: false,
-				},
-			},
-		},
-		facilitatorConfig,
-	),
-);
-app.use("/orders/base", createPayerLoggingMiddleware("base"));
+app.use("/orders/solana", createPayerLoggingMiddleware("solana"));
 
 app.post(
 	"/orders/solana",
@@ -158,20 +134,15 @@ app.post(
 	}),
 );
 
-app.post(
-	"/orders/base",
-	buildCreateOrderHandler({
-		schema: baseCreateOrderSchema,
-		paymentMethod: "base",
-	}),
-);
+// Order status endpoint (not protected by x402)
+app.get("/orders/:orderId", getOrderStatusHandler);
 
 app.get("/", (c) => {
 	return c.json({
 		status: "ok",
 		endpoints: {
-			solana: "/orders/solana",
-			base: "/orders/base",
+			createOrder: "POST /orders/solana",
+			getOrderStatus: "GET /orders/:orderId",
 		},
 	});
 });

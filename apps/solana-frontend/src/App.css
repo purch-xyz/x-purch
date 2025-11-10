@@ -127,6 +127,65 @@
 	margin: 0.5rem 0 1.25rem;
 }
 
+.settlementPrompt {
+	margin-top: 1.5rem;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 0.75rem;
+	text-align: center;
+}
+
+.itemPreview {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 0.75rem;
+	margin-bottom: 0.75rem;
+	text-align: center;
+}
+
+.itemPreviewImage {
+	width: 180px;
+	height: 180px;
+	object-fit: cover;
+	border: 1px solid rgba(0, 0, 0, 0.3);
+	box-shadow: 0 12px 24px rgba(0, 0, 0, 0.12);
+	background: rgba(255, 255, 255, 0.7);
+}
+
+.itemPreviewCopy {
+	display: flex;
+	flex-direction: column;
+	gap: 0.35rem;
+	max-width: 360px;
+}
+
+.itemPreviewTitle {
+	font-family: "Times New Roman", serif;
+	font-size: 1rem;
+	font-weight: 700;
+	margin: 0;
+	color: #000000;
+}
+
+.settlementNote {
+	margin: 0;
+	font-size: 0.95rem;
+	color: rgba(0, 0, 0, 0.7);
+	font-family: "Times New Roman", serif;
+}
+
+.settlementError {
+	margin: 0;
+	color: rgb(128, 35, 35);
+	font-size: 0.85rem;
+}
+
+.inlineStatus {
+	margin-top: 1rem;
+}
+
 .connectRow {
 	display: flex;
 	justify-content: center;
@@ -246,6 +305,7 @@
 	padding: 0.9rem 1rem;
 	border: 1px solid rgba(0, 0, 0, 0.35);
 	background: rgba(255, 255, 255, 0.6);
+	font-family: "Times New Roman", serif;
 }
 
 .status.waiting {

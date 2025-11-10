@@ -47,8 +47,8 @@ The `apps/solana-frontend` project gives judges a simple form to exercise `POST 
 2. Terminal A — run the API: `bun run dev`.
 3. Terminal B — start the console: `bun run frontend:dev`.
 4. Open http://localhost:5173, connect your Solana wallet (Phantom or Backpack), and fill in the order form. The payer address auto-populates from the connected wallet.
-5. Submit. The UI calls the API once, expects a `402 Payment Required`, then prompts to “Authorize Payment & Finalize”; your wallet signs the transaction to retry with an x402 signature.
-6. The response console shows the decoded `X-PAYMENT-RESPONSE` header plus the JSON payload from the API.
+5. Submit. The UI triggers the x402 challenge (`402 Payment Required`)—approve the first wallet prompt for the $0.01 authorization. After the API responds with the Crossmint order, click **Pay Order** to sign the serialized transaction that transfers the full USDC amount.
+6. The response console shows the decoded `X-PAYMENT-RESPONSE`, full API payload, and the Solana signature returned by your wallet.
 
 Prefer command-line testing? You can skip the frontend and run `bun run src/clients/solana-client.ts` to drive the same flow.
 

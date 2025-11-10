@@ -1,5 +1,5 @@
 {
-	"id": "66f23439-2d1d-4548-97d1-2accb2ee8cff",
+	"id": "376cb98d-37f6-46d3-bb20-c843192b01af",
 	"prevId": "00000000-0000-0000-0000-000000000000",
 	"version": "7",
 	"dialect": "postgresql",
@@ -24,6 +24,12 @@
 					"name": "network",
 					"type": "x402_network",
 					"typeSchema": "public",
+					"primaryKey": false,
+					"notNull": true
+				},
+				"client_secret": {
+					"name": "client_secret",
+					"type": "text",
 					"primaryKey": false,
 					"notNull": true
 				},
