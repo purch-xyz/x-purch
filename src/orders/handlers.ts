@@ -346,6 +346,12 @@ export const buildCreateOrderHandler =
 				hasSerializedTransaction: Boolean(serializedTransaction),
 			});
 
+			const location = new URL(
+				`/orders/${response.order.orderId}`,
+				c.req.url,
+			).toString();
+			c.header("Location", location);
+
 			return c.json(
 				{
 					clientSecret: response.clientSecret,
