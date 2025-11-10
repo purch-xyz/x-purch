@@ -128,7 +128,7 @@ app.use(
 					maxTimeoutSeconds: 300,
 					mimeType: "application/json",
 					description:
-						"Create an e-commerce order (Amazon, Shopify, etc.) paid with USDC on Solana. Includes product fulfillment to physical address.",
+						"Create an e-commerce order (Amazon, Shopify, etc.) paid with USDC on Solana. Includes product fulfillment to physical address. Amazon: US only. Shopify: worldwide.",
 					discoverable: true,
 					inputSchema: {
 						bodyFields: {
