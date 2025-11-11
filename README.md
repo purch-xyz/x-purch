@@ -3,7 +3,7 @@
 This is an [x402](https://docs.cdp.coinbase.com/x402/) API for Purch — our hackathon project showcasing an x402-powered checkout using USDC on Solana, with fulfillment handled via Crossmint and persistence in Supabase, allowing users to buy 1B+ items on Amazon, Shopify and other stores. Purch is already listed on the [x402 Bazaar discovery layer](https://docs.cdp.coinbase.com/x402/bazaar), so builders browsing Coinbase's CDP catalog can try the live experience immediately. We open-sourced the code for transparency and to help judges and reviewers run the demo locally. 
 
 ## Live Service
-- API base: https://x402.purch.xyz
+- API base: https://x402.purch.xyz or https://x-purch-741433844771.us-east1.run.app
 - Health: https://x402.purch.xyz/health
 - Docs: https://x402.purch.xyz/docs
 - Create order (POST): https://x402.purch.xyz/orders/solana
