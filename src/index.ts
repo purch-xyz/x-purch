@@ -1,8 +1,9 @@
 import { createFacilitatorConfig } from "@coinbase/x402";
+import { HTTPFacilitatorClient, x402ResourceServer } from "@x402/core/server";
+import { paymentMiddleware } from "@x402/hono";
+import { SOLANA_MAINNET_CAIP2 } from "@x402/svm";
+import { ExactSvmScheme } from "@x402/svm/exact/server";
 import { Hono, type MiddlewareHandler } from "hono";
-import { decodePayment } from "x402/schemes";
-import { svm } from "x402/shared";
-import { paymentMiddleware, type SolanaAddress } from "x402-hono";
 import { env } from "./env";
 import { createValidationMiddleware } from "./middleware/validation";
 import {
@@ -11,9 +12,17 @@ import {
 } from "./orders/handlers";
 import { solanaCreateOrderSchema } from "./orders/schemas";
 
+// Create facilitator config with CDP API keys
 const facilitatorConfig = createFacilitatorConfig(
 	env.X402_CDP_API_KEY_ID,
 	env.X402_CDP_API_KEY_SECRET,
+);
+
+// Create facilitator client and register Solana scheme
+const facilitatorClient = new HTTPFacilitatorClient(facilitatorConfig);
+const resourceServer = new x402ResourceServer(facilitatorClient).register(
+	SOLANA_MAINNET_CAIP2,
+	new ExactSvmScheme(),
 );
 
 const createPayerLoggingMiddleware = (
@@ -23,44 +32,11 @@ const createPayerLoggingMiddleware = (
 		const paymentHeader = c.req.header("X-PAYMENT");
 
 		if (paymentHeader) {
-			try {
-				const decodedPayment = decodePayment(paymentHeader);
-				let payerAddress: string | undefined;
-
-				if ("authorization" in decodedPayment.payload) {
-					payerAddress = decodedPayment.payload.authorization.from;
-				} else if ("transaction" in decodedPayment.payload) {
-					try {
-						const transaction = svm.decodeTransactionFromPayload(
-							decodedPayment.payload,
-						);
-						const extracted = svm.getTokenPayerFromTransaction(transaction);
-						payerAddress = extracted.length > 0 ? extracted : undefined;
-					} catch (transactionError) {
-						console.warn("[x402] Unable to decode Solana payment payload", {
-							paymentMethod,
-							network: decodedPayment.network,
-							error:
-								transactionError instanceof Error
-									? transactionError.message
-									: String(transactionError),
-						});
-					}
-				}
-
-				console.log("[x402] Payment authorized", {
-					paymentMethod,
-					network: decodedPayment.network,
-					path: `${c.req.method.toUpperCase()} ${c.req.path}`,
-					payerAddress: payerAddress ?? null,
-				});
-			} catch (error) {
-				console.warn("[x402] Failed to parse X-PAYMENT header", {
-					paymentMethod,
-					path: `${c.req.method.toUpperCase()} ${c.req.path}`,
-					error: error instanceof Error ? error.message : String(error),
-				});
-			}
+			console.log("[x402] Payment received", {
+				paymentMethod,
+				path: `${c.req.method.toUpperCase()} ${c.req.path}`,
+				hasPaymentHeader: true,
+			});
 		}
 
 		await next();
@@ -118,103 +94,107 @@ app.use("/orders/solana", createPayerLoggingMiddleware("solana"));
 app.use(
 	"/orders/solana",
 	paymentMiddleware(
-		env.X402_SOLANA_WALLET_ADDRESS as SolanaAddress,
 		{
 			"POST /orders/solana": {
-				price: "$0.01",
-				network: "solana",
-				config: {
-					resource: "https://x402.purch.xyz/orders/solana",
-					maxTimeoutSeconds: 300,
-					mimeType: "application/json",
-					description:
-						"Create an e-commerce order (Amazon, Shopify, etc.) paid with USDC on Solana. Includes product fulfillment to physical address. Amazon: US only. Shopify: worldwide.",
-					discoverable: true,
-					inputSchema: {
-						bodyFields: {
-							email: {
-								type: "string",
-								format: "email",
-								description: "Email address for order notifications",
-								required: true,
-							},
-							payerAddress: {
-								type: "string",
-								pattern: "^[1-9A-HJ-NP-Za-km-z]{32,44}$",
-								description: "Solana wallet address in base58 format",
-								required: true,
-							},
-							productUrl: {
-								type: "string",
-								format: "uri",
-								description:
-									"Product URL from Amazon, Shopify, or browser automation sites",
-								required: true,
-							},
-							physicalAddress: {
-								type: "object",
-								description: "Shipping address for product delivery",
-								required: true,
-								properties: {
-									name: {
-										type: "string",
-										description: "Recipient name",
-										required: true,
-									},
-									line1: {
-										type: "string",
-										description: "Address line 1",
-										required: true,
-									},
-									line2: {
-										type: "string",
-										description: "Address line 2 (optional)",
-									},
-									city: { type: "string", description: "City", required: true },
-									state: {
-										type: "string",
-										description:
-											"State/Province (optional, 2-letter code, e.g., CA)",
-									},
-									postalCode: {
-										type: "string",
-										description: "Postal/ZIP code",
-										required: true,
-									},
-									country: {
-										type: "string",
-										pattern: "^[A-Z]{2}$",
-										description: "ISO 3166-1 alpha-2 country code (e.g., US)",
-										required: true,
+				accepts: [
+					{
+						scheme: "exact",
+						price: "$0.01",
+						network: SOLANA_MAINNET_CAIP2,
+						payTo: env.X402_SOLANA_WALLET_ADDRESS,
+					},
+				],
+				description:
+					"Create an e-commerce order (Amazon, Shopify, etc.) paid with USDC on Solana. Includes product fulfillment to physical address. Amazon: US only. Shopify: worldwide.",
+				mimeType: "application/json",
+				maxTimeoutSeconds: 300,
+				extensions: {
+					bazaar: {
+						discoverable: true,
+						category: "ecommerce",
+						tags: ["orders", "shopping", "amazon", "crypto"],
+						inputSchema: {
+							type: "object",
+							required: [
+								"email",
+								"payerAddress",
+								"productUrl",
+								"physicalAddress",
+							],
+							properties: {
+								email: {
+									type: "string",
+									format: "email",
+									description: "Email address for order notifications",
+								},
+								payerAddress: {
+									type: "string",
+									pattern: "^[1-9A-HJ-NP-Za-km-z]{32,44}$",
+									description: "Solana wallet address in base58 format",
+								},
+								productUrl: {
+									type: "string",
+									format: "uri",
+									description:
+										"Product URL from Amazon, Shopify, or browser automation sites",
+								},
+								physicalAddress: {
+									type: "object",
+									description: "Shipping address for product delivery",
+									required: ["name", "line1", "city", "postalCode", "country"],
+									properties: {
+										name: { type: "string", description: "Recipient name" },
+										line1: { type: "string", description: "Address line 1" },
+										line2: {
+											type: "string",
+											description: "Address line 2 (optional)",
+										},
+										city: { type: "string", description: "City" },
+										state: {
+											type: "string",
+											description: "State/Province (2-letter code)",
+										},
+										postalCode: {
+											type: "string",
+											description: "Postal/ZIP code",
+										},
+										country: {
+											type: "string",
+											pattern: "^[A-Z]{2}$",
+											description: "ISO 3166-1 alpha-2 country code (e.g., US)",
+										},
 									},
 								},
+								locale: {
+									type: "string",
+									description: "Preferred locale (optional, e.g., en-US)",
+								},
 							},
-							locale: {
-								type: "string",
-								description: "Preferred locale (optional, e.g., en-US)",
+						},
+						outputSchema: {
+							type: "object",
+							properties: {
+								orderId: {
+									type: "string",
+									format: "uuid",
+									description: "Unique order identifier for tracking",
+								},
+								clientSecret: {
+									type: "string",
+									description: "Client secret required to check order status",
+								},
+								serializedTransaction: {
+									type: "string",
+									description:
+										"Base64 encoded Solana transaction ready for signing",
+								},
 							},
-						},
-					},
-					outputSchema: {
-						orderId: {
-							type: "string",
-							format: "uuid",
-							description: "Unique order identifier for tracking",
-						},
-						clientSecret: {
-							type: "string",
-							description: "Client secret required to check order status",
-						},
-						serializedTransaction: {
-							type: "string",
-							description:
-								"Base64 encoded Solana transaction ready for signing",
 						},
 					},
 				},
 			},
 		},
-		facilitatorConfig,
+		resourceServer,
 	),
 );
 
@@ -247,7 +227,7 @@ app.get("/", (c) => {
 					required: true,
 					protocol: "x402",
 					price: "$0.01",
-					network: "solana",
+					network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
 					token: "USDC",
 				},
 				requestBody: {
@@ -411,7 +391,7 @@ app.get("/docs", (c) => {
 					tags: ["orders"],
 					"x-x402": {
 						price: "$0.01",
-						network: "solana",
+						network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
 						token: "USDC",
 						required: true,
 					},
