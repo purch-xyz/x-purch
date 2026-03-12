@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { env } from "../env";
 
 const DEFAULT_LOCALE = "en-US";
@@ -194,9 +195,89 @@ const PLATFORM_HOSTNAMES = {
 	],
 } as const;
 
-const PRODUCT_LOCATOR_PREFIXES = ["amazon:", "shopify:", "url:"] as const;
+const SHORT_URL_HOSTNAMES = ["a.co", "amzn.to", "amzn.com", "bit.ly", "t.co"];
 
-const SHOPIFY_HEADER_PREFIXES = ["x-shopify"] as const;
+const BLOCKED_HOSTNAMES = ["localhost"] as const;
+const BLOCKED_HOST_SUFFIXES = [
+	".localhost",
+	".local",
+	".localdomain",
+	".internal",
+] as const;
+
+const SHOPIFY_PRODUCT_PATH = "/products/";
+
+const isHostnameBlocked = (hostname: string): boolean => {
+	return (
+		BLOCKED_HOSTNAMES.includes(
+			hostname as (typeof BLOCKED_HOSTNAMES)[number],
+		) || BLOCKED_HOST_SUFFIXES.some((suffix) => hostname.endsWith(suffix))
+	);
+};
+
+const validateProductUrl = (url: URL): void => {
+	const hostname = url.hostname.toLowerCase();
+
+	if (url.protocol !== "https:") {
+		throw new CrossmintOrderError("Product URL must use https", 400);
+	}
+
+	if (!hostname || url.username || url.password || url.port) {
+		throw new CrossmintOrderError("Product URL is invalid", 400);
+	}
+
+	if (isIP(hostname) !== 0 || isHostnameBlocked(hostname)) {
+		throw new CrossmintOrderError("Product URL host is not allowed", 400);
+	}
+};
+
+const expandShortUrl = async (url: string): Promise<string | null> => {
+	let parsedUrl: URL;
+
+	try {
+		parsedUrl = new URL(url);
+	} catch {
+		return null;
+	}
+
+	validateProductUrl(parsedUrl);
+
+	const hostname = parsedUrl.hostname.toLowerCase();
+	const isShortUrl = SHORT_URL_HOSTNAMES.some(
+		(domain) => hostname === domain || hostname.endsWith(`.${domain}`),
+	);
+
+	if (!isShortUrl) {
+		return null;
+	}
+
+	try {
+		const response = await fetch(url, {
+			method: "HEAD",
+			redirect: "follow",
+			signal: AbortSignal.timeout(5000),
+		});
+
+		const finalUrl = response.url;
+
+		if (finalUrl && finalUrl !== url) {
+			validateProductUrl(new URL(finalUrl));
+			console.log("[resolveProductLocator] Expanded short URL", {
+				original: url,
+				resolved: finalUrl,
+			});
+			return finalUrl;
+		}
+
+		return null;
+	} catch (error) {
+		console.warn("[resolveProductLocator] Failed to expand short URL", {
+			url,
+			error,
+		});
+		return null;
+	}
+};
 
 export const resolveProductLocator = async (
 	rawProductUrl: string,
@@ -207,14 +288,6 @@ export const resolveProductLocator = async (
 		throw new CrossmintOrderError("Product URL is required", 400);
 	}
 
-	const existingPrefix = PRODUCT_LOCATOR_PREFIXES.find((prefix) =>
-		trimmed.toLowerCase().startsWith(prefix),
-	);
-
-	if (existingPrefix) {
-		return trimmed;
-	}
-
 	let parsedUrl: URL;
 
 	try {
@@ -223,14 +296,23 @@ export const resolveProductLocator = async (
 		throw new CrossmintOrderError("Product URL must be a valid URL", 400);
 	}
 
-	const hostname = parsedUrl.hostname.toLowerCase();
+	validateProductUrl(parsedUrl);
+
+	const expandedUrl = await expandShortUrl(trimmed);
+	const resolvedUrl = expandedUrl ?? trimmed;
+	const resolvedParsed = expandedUrl ? new URL(expandedUrl) : parsedUrl;
+	validateProductUrl(resolvedParsed);
+	const hostname = resolvedParsed.hostname.toLowerCase();
 
 	if (PLATFORM_HOSTNAMES.amazon.some((domain) => hostname.includes(domain))) {
-		return `amazon:${trimmed}`;
+		return `amazon:${resolvedUrl}`;
 	}
 
-	if (PLATFORM_HOSTNAMES.shopify.some((domain) => hostname.includes(domain))) {
-		return buildShopifyLocator(parsedUrl);
+	if (
+		PLATFORM_HOSTNAMES.shopify.some((domain) => hostname.includes(domain)) ||
+		resolvedParsed.pathname.includes(SHOPIFY_PRODUCT_PATH)
+	) {
+		return buildShopifyLocator(resolvedParsed);
 	}
 
 	const isBrowserAutomationDomain = PLATFORM_HOSTNAMES.browserAutomation.some(
@@ -238,82 +320,10 @@ export const resolveProductLocator = async (
 	);
 
 	if (isBrowserAutomationDomain) {
-		return `url:${trimmed}`;
+		return `url:${resolvedUrl}`;
 	}
 
-	const detectedShopify = await isShopifyStorefront(parsedUrl);
-
-	if (detectedShopify) {
-		return buildShopifyLocator(parsedUrl);
-	}
-
-	return `url:${trimmed}`;
-};
-
-const isShopifyStorefront = async (url: URL): Promise<boolean> => {
-	const hostname = url.hostname.toLowerCase();
-
-	if (PLATFORM_HOSTNAMES.shopify.some((domain) => hostname.includes(domain))) {
-		return true;
-	}
-
-	const requestUrl = url.toString();
-	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), 5000);
-
-	const inspectHeaders = (headers: Headers) => {
-		for (const [key, value] of headers.entries()) {
-			const loweredKey = key.toLowerCase();
-			const loweredValue = value.toLowerCase();
-
-			if (
-				SHOPIFY_HEADER_PREFIXES.some((prefix) => loweredKey.startsWith(prefix))
-			) {
-				return true;
-			}
-
-			if (loweredValue.includes("shopify")) {
-				return true;
-			}
-		}
-
-		return false;
-	};
-
-	const tryFetch = async (method: "HEAD" | "GET") => {
-		try {
-			const response = await fetch(requestUrl, {
-				method,
-				redirect: "follow",
-				signal: controller.signal,
-			});
-
-			if (inspectHeaders(response.headers)) {
-				return true;
-			}
-
-			return false;
-		} catch (error) {
-			console.warn("[createCrossmintOrder] Failed to inspect product URL", {
-				requestUrl,
-				method,
-				error,
-			});
-			return false;
-		}
-	};
-
-	try {
-		const headDetected = await tryFetch("HEAD");
-
-		if (headDetected) {
-			return true;
-		}
-
-		return await tryFetch("GET");
-	} finally {
-		clearTimeout(timeout);
-	}
+	return `url:${resolvedUrl}`;
 };
 
 const buildShopifyLocator = (url: URL): string => {
